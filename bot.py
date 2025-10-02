@@ -17,7 +17,7 @@ import random
 import time
 import asyncio
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Optional, Tuple, Set, Any
 from enum import Enum
 from dotenv import load_dotenv
@@ -122,8 +122,8 @@ for file_path in [USERS_FILE, CHAT_HISTORY_FILE, COMMAND_LOGS, FEEDBACK_FILE, RE
     if not os.path.exists(file_path):
         with open(file_path, 'w', encoding='utf-8') as f:
             if file_path.endswith('.json'):
-                if 'reminders' in file_path or 'broadcasts' in file_path:
-                    json.dump([], f, ensure_ascii=False, indent=2)
+                    if any(x in file_path for x in ['reminders', 'broadcasts', 'feedback']):
+                        json.dump([], f, ensure_ascii=False, indent=2)
                 else:
                     json.dump({}, f, ensure_ascii=False, indent=2)
             else:
@@ -379,9 +379,10 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         save_user_data(user.id, user_data)
     
     # Format profile information
+    username = user_data['profile'].get('username', "")
+    username_segment = f" (@{username})" if username else ""
     profile_text = (
-        f"👤 *{user_data['profile']['full_name']}*"
-        f"{f' (@{user_data['profile']['username']})' if user_data['profile']['username'] else ''}\n\n"
+        f"👤 *{user_data['profile']['full_name']}*{username_segment}\n\n"
         f"🆔 User ID: `{user.id}`\n"
         f"📅 Member since: {datetime.fromisoformat(user_data['first_seen']).strftime('%Y-%m-%d %H:%M')}\n"
         f"🌐 Language: {user_data['language'].upper()}\n"
@@ -779,8 +780,13 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     try:
         with open(FEEDBACK_FILE, 'r+', encoding='utf-8') as f:
-            feedbacks = json.load(f)
-            feedbacks[str(datetime.now().timestamp())] = feedback
+            try:
+                feedbacks = json.load(f)
+            except json.JSONDecodeError:
+                feedbacks = []
+            if not isinstance(feedbacks, list):
+                feedbacks = list(feedbacks.values()) if isinstance(feedbacks, dict) else []
+            feedbacks.append(feedback)
             f.seek(0)
             json.dump(feedbacks, f, indent=4, ensure_ascii=False)
             f.truncate()
@@ -1131,7 +1137,7 @@ def main() -> None:
     job_queue = application.job_queue
     
     # Add daily stats job
-    job_queue.run_daily(send_daily_stats, time=datetime.time(hour=0, minute=0))
+    job_queue.run_daily(send_daily_stats, time=dt_time(hour=0, minute=0))
     
     # Start the bot
     application.run_polling()

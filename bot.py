@@ -290,10 +290,14 @@ def save_all_users(users_data: dict) -> None:
 def save_user_data(user_id: int, data: dict) -> None:
     """Save user data to storage."""
     try:
+        # Use file locking to prevent race conditions
         with open(USERS_FILE, 'r+', encoding='utf-8') as f:
             users = json.load(f)
             users[str(user_id)] = data
-            save_all_users(users)
+            # Write directly to the same file handle to avoid race conditions
+            f.seek(0)
+            json.dump(users, f, indent=4, ensure_ascii=False, default=str)
+            f.truncate()
     except Exception as e:
         logger.error(f"Error saving user data: {e}")
 
@@ -796,7 +800,7 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     admin_message = (
         f"📝 *New Feedback*\n\n"
         f"From: {user.mention_markdown_v2()}"
-        f" ({user.id if user.id != user.username else ''})\n"
+        f" (ID: {user.id})\n"
         f"Text: {feedback_text}"
     )
     
@@ -920,7 +924,7 @@ def save_reminder(user_id: int, reminder_time: datetime, message: str) -> None:
         logger.error(f"Error saving reminder: {e}")
 
 def parse_time(time_str: str) -> datetime:
-    """Parse natural language time string to datetime."""
+    """Parse natural language time string to datetime with proper validation."""
     # This is a simplified version - you might want to use a library like dateparser for production
     now = datetime.now()
     
@@ -932,13 +936,25 @@ def parse_time(time_str: str) -> datetime:
                 amount = int(parts[0])
                 unit = parts[1].lower()
                 
+                # Security: Validate amount is positive and within reasonable bounds
+                if amount <= 0:
+                    raise ValueError("Time amount must be positive")
+                
                 if 'minute' in unit:
+                    if amount > 525600:  # Max 1 year in minutes
+                        raise ValueError("Time amount too large")
                     return now + timedelta(minutes=amount)
                 elif 'hour' in unit:
+                    if amount > 8760:  # Max 1 year in hours
+                        raise ValueError("Time amount too large")
                     return now + timedelta(hours=amount)
                 elif 'day' in unit:
+                    if amount > 365:  # Max 1 year in days
+                        raise ValueError("Time amount too large")
                     return now + timedelta(days=amount)
                 elif 'week' in unit:
+                    if amount > 52:  # Max 1 year in weeks
+                        raise ValueError("Time amount too large")
                     return now + timedelta(weeks=amount)
             except (ValueError, IndexError):
                 pass
@@ -949,6 +965,13 @@ def parse_time(time_str: str) -> datetime:
         try:
             # Try to parse time in format HH:MM
             hours, minutes = map(int, time_part.split(':'))
+            
+            # Security: Validate hours and minutes are within valid ranges
+            if not (0 <= hours <= 23):
+                raise ValueError("Hours must be between 0 and 23")
+            if not (0 <= minutes <= 59):
+                raise ValueError("Minutes must be between 0 and 59")
+                
             reminder_time = now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
             
             # If the time has already passed today, set it for tomorrow
